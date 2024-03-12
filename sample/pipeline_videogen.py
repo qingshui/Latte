@@ -542,6 +542,7 @@ class VideoGenPipeline(DiffusionPipeline):
         mask_feature: bool = True,
         enable_temporal_attentions: bool = True,
         enable_vae_temporal_decoder: bool = False,
+        use_fp16: bool = False,
     ) -> Union[VideoPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -648,7 +649,9 @@ class VideoGenPipeline(DiffusionPipeline):
         )
         if do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-
+        # prompt fp32 need convert to fp16
+        if use_fp16 and prompt_embeds.dtype == torch.float32:
+            prompt_embeds = prompt_embeds.to(dtype=torch.float16)
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
@@ -666,10 +669,10 @@ class VideoGenPipeline(DiffusionPipeline):
             generator,
             latents,
         )
-
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
+        #latents = latents.to(dtype=torch.float16)
         # 6.1 Prepare micro-conditions.
         added_cond_kwargs = {"resolution": None, "aspect_ratio": None}
         if self.transformer.config.sample_size == 128:

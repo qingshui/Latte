@@ -26,16 +26,34 @@ def main(args):
     torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    transformer_model = get_models(args).to(device, dtype=torch.float16)
-    state_dict = find_model(args.ckpt)
-    transformer_model.load_state_dict(state_dict)
+    transformer_model = get_models(args).to(device)
+    checkpoint = find_model(args.ckpt)
+    model_dict = transformer_model.state_dict()
+    # print("checkpoint: {}".format(checkpoint.keys()))
+    # print("model_dict: {}".format(model_dict.keys()))
+    # 1. filter out unnecessary keys
+    pretrained_dict = {}
+    for k, v in checkpoint.items():
+        if k in model_dict:
+            pretrained_dict[k] = v
+        else:
+            print('Ignoring: {}'.format(k))
+    print('Successfully Load {}% original pretrained model weights '.format(len(pretrained_dict) / len(checkpoint.items()) * 100))
+    # 2. overwrite entries in the existing state dict
+    model_dict.update(pretrained_dict)
+    transformer_model.load_state_dict(model_dict)
     
     if args.enable_vae_temporal_decoder:
-        vae = AutoencoderKLTemporalDecoder.from_pretrained(args.pretrained_model_path, subfolder="vae_temporal_decoder", torch_dtype=torch.float16).to(device)
+        vae = AutoencoderKLTemporalDecoder.from_pretrained(args.pretrained_model_path, subfolder="vae_temporal_decoder").to(device)
     else:
-        vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae", torch_dtype=torch.float16).to(device)
+        vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
     tokenizer = T5Tokenizer.from_pretrained(args.pretrained_model_path, subfolder="tokenizer")
-    text_encoder = T5EncoderModel.from_pretrained(args.pretrained_model_path, subfolder="text_encoder", torch_dtype=torch.float16).to(device)
+    text_encoder = T5EncoderModel.from_pretrained(args.pretrained_model_path, subfolder="text_encoder").to(device)
+
+    if args.use_fp16:
+        print('WARNING: using half percision for inferencing!')
+        vae.to(dtype=torch.float16)
+        transformer_model.to(dtype=torch.float16)
 
     # set eval mode
     transformer_model.eval()
@@ -113,13 +131,11 @@ def main(args):
                                                   beta_schedule=args.beta_schedule,
                                                   variance_type=args.variance_type)
 
-
     videogen_pipeline = VideoGenPipeline(vae=vae, 
                                  text_encoder=text_encoder, 
                                  tokenizer=tokenizer, 
                                  scheduler=scheduler, 
                                  transformer=transformer_model).to(device)
-    # videogen_pipeline.enable_xformers_memory_efficient_attention()
 
     if not os.path.exists(args.save_img_path):
         os.makedirs(args.save_img_path)
@@ -136,7 +152,8 @@ def main(args):
                                 enable_temporal_attentions=args.enable_temporal_attentions,
                                 num_images_per_prompt=1,
                                 mask_feature=True,
-                                enable_vae_temporal_decoder=args.enable_vae_temporal_decoder
+                                enable_vae_temporal_decoder=args.enable_vae_temporal_decoder,
+                                use_fp16=args.use_fp16,
                                 ).video
         try:
             imageio.mimwrite(args.save_img_path + prompt.replace(' ', '_') + '_%04d' % args.run_time + 'webv-imageio.mp4', videos[0], fps=8, quality=9) # highest quality is 10, lowest is 0
